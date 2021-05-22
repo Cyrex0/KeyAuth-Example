@@ -301,20 +301,20 @@ int main()
 	
 	
 	
-	std::cout << "Only start the cheat when you are in game!" << std::endl;
+	
 
 	
 	std::cout << "1.Run Cheat " << std::endl;
 
-	//std::cout << "2.Install Exploit " << std::endl;
+	std::cout << "2.Install Exploit " << std::endl;
 
 	
 	std::cin >> choice;
 
-	if (choice == 999)
+	if (choice == 2)
 	{
 		
-		//KeyAuthApp.Memory("091666", s_reply, {}, true, &file);
+		KeyAuthApp.Memory("AppID here", s_reply, {}, true, &file);
 																			
 	}
 	else if (choice == 1) 
