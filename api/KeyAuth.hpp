@@ -8,95 +8,28 @@
 #include <cryptopp/hex.h>
 #include <cryptopp/ccm.h>
 
-#include <curl/curl.h>
-
 #include <atlsecurity.h> 
+#include <strsafe.h> 
 #include <windows.h>
 #include <string>
 #include <stdio.h>
 #include <iostream>
-#include <openssl/md5.h> 
+
+#include <curl/curl.h>
+
+#include <shellapi.h>
 
 #include <sstream> 
 #include <iomanip> 
-#include "xorstr.hpp"
+#include "../xorstr.hpp"
 #include <fstream> 
 
 #include <nlohmann/json.hpp>
-#include "../lw_http.hpp"
 
 #pragma comment(lib, "rpcrt4.lib")
 
-#define BUFFSIZE 16384
-/*
- /$$   /$$                      /$$$$$$              /$$     /$$
-| $$  /$$/                     /$$__  $$            | $$    | $$
-| $$ /$$/   /$$$$$$  /$$   /$$| $$  \ $$ /$$   /$$ /$$$$$$  | $$$$$$$
-| $$$$$/   /$$__  $$| $$  | $$| $$$$$$$$| $$  | $$|_  $$_/  | $$__  $$
-| $$  $$  | $$$$$$$$| $$  | $$| $$__  $$| $$  | $$  | $$    | $$  \ $$
-| $$\  $$ | $$_____/| $$  | $$| $$  | $$| $$  | $$  | $$ /$$| $$  | $$
-| $$ \  $$|  $$$$$$$|  $$$$$$$| $$  | $$|  $$$$$$/  |  $$$$/| $$  | $$
-|__/  \__/ \_______/ \____  $$|__/  |__/ \______/    \___/  |__/  |__/
-					 /$$  | $$
-					|  $$$$$$/
-					 \______/
-
-		Copyright KeyAuth ©. Use of this code in anything besides
-		your c++ application that connects to KeyAuth is prohibited.
-*/
-
 namespace KeyAuth {
-	std::string GetCurrentDirectory()
-	{
-		char buffer[MAX_PATH];
-		GetModuleFileNameA(NULL, buffer, MAX_PATH);
-		std::string::size_type pos = std::string(buffer).find_last_of("\\/");
 
-		return std::string(buffer);
-	}
-	std::string get_md5hash(const std::string& fname)
-	{
-
-		char buffer[BUFFSIZE];
-		unsigned char digest[MD5_DIGEST_LENGTH];
-
-		std::stringstream ss;
-		std::string md5string;
-
-		std::ifstream ifs(fname, std::ifstream::binary);
-
-		MD5_CTX md5Context;
-
-		MD5_Init(&md5Context);
-
-
-		while (ifs.good())
-		{
-
-			ifs.read(buffer, BUFFSIZE);
-
-			MD5_Update(&md5Context, buffer, ifs.gcount());
-		}
-
-		ifs.close();
-
-		int res = MD5_Final(digest, &md5Context);
-
-		if (res == 0) // hash failed 
-			return {};   // or raise an exception 
-
-		// set up stringstream format 
-		ss << std::hex << std::uppercase << std::setfill('0');
-
-
-		for (unsigned char uc : digest)
-			ss << std::setw(2) << (int)uc;
-
-
-		md5string = ss.str();
-
-		return md5string;
-	}
 	class encryption {
 	public:
 		std::string name;
@@ -190,6 +123,25 @@ namespace KeyAuth {
 			return encoded_text;
 		}
 
+		static std::string decode(const std::string& encoded_text) {
+			std::string out;
+
+			try {
+				CryptoPP::StringSource decoding(encoded_text, true,
+					new CryptoPP::HexDecoder(
+						new CryptoPP::StringSink(out)
+					)
+				);
+			}
+			catch (CryptoPP::Exception& ex) {
+				system(XorStr("cls").c_str());
+				std::cout << ex.what();
+				exit(0);
+			}
+
+			return out;
+		}
+
 		static std::string iv_key() {
 			UUID uuid = { 0 };
 			std::string guid;
@@ -248,8 +200,10 @@ namespace KeyAuth {
 
 	};
 
+
 	auto iv = encryption::sha256(encryption::iv_key());
 	class api {
+
 
 	public:
 
@@ -258,31 +212,33 @@ namespace KeyAuth {
 		api(std::string name, std::string ownerid, std::string secret, std::string version)
 			: name(name), ownerid(ownerid), secret(secret), version(version) {}
 
-		void init() {
+		void init()
+		{
+			enckey = encryption::sha256(encryption::iv_key());
 			if (ownerid.length() != 10 || secret.length() != 64)
 			{
-				std::cout << XorStr("\n\n Application Not Setup Correctly. Please Wait Video Linked in Main.cpp");
+				std::cout << XorStr("\n\n Application Not Setup Correctly. Please Watch Video Linked in Main.cpp");
 				Sleep(4500);
 				exit(0);
 			}
 
-			std::string hash = get_md5hash(GetCurrentDirectory());
 			auto data =
 				XorStr("type=").c_str() + encryption::encode(XorStr("init").c_str()) +
 				XorStr("&ver=").c_str() + encryption::encrypt(version, secret, iv) +
-				XorStr("&hash=").c_str() + hash +
+				XorStr("&enckey=").c_str() + encryption::encrypt(enckey, secret, iv) +
 				XorStr("&name=").c_str() + encryption::encode(name) +
 				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
 				XorStr("&init_iv=").c_str() + iv;
 
 			auto response = req(data);
-			
+
 			response = encryption::decrypt(response, secret, iv);
 			auto json = response_decoder.parse(response);
 
 			if (json[("success")])
 			{
-				// optional success message. Make sure to string encrypt for security
+				sessionid = json[("sessionid")];
+				// optional success message
 			}
 			else if (json[("message")] == "invalidver")
 			{
@@ -299,48 +255,140 @@ namespace KeyAuth {
 			}
 		}
 
-		bool login(std::string key) {
-
+		void login(std::string username, std::string password)
+		{
 			std::string hwid = utils::get_hwid();
 			auto iv = encryption::sha256(encryption::iv_key());
 			auto data =
 				XorStr("type=").c_str() + encryption::encode("login") +
-				XorStr("&key=").c_str() + encryption::encrypt(key, secret, iv) +
-				XorStr("&hwid=").c_str() + encryption::encrypt(hwid, secret, iv) +
+				XorStr("&username=").c_str() + encryption::encrypt(username, enckey, iv) +
+				XorStr("&pass=").c_str() + encryption::encrypt(password, enckey, iv) +
+				XorStr("&hwid=").c_str() + encryption::encrypt(hwid, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
 				XorStr("&name=").c_str() + encryption::encode(name) +
 				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
 				XorStr("&init_iv=").c_str() + iv;
 			auto response = req(data);
-			response = encryption::decrypt(response, secret, iv);
+			response = encryption::decrypt(response, enckey, iv);
 			auto json = response_decoder.parse(response);
-		    
+
 			if (json[("success")])
 			{
-				// optional success message. Make sure to string encrypt for security
+				// optional success message
 				load_user_data(json[("info")]);
 			}
 			else
 			{
 				std::cout << XorStr("\n\n Status: Failure: ");
 				std::cout << std::string(json[("message")]);
-				return false;
+				Sleep(3500);
+				exit(0);
+			}
+		}
+
+		void regstr(std::string username, std::string password, std::string key) {
+
+			std::string hwid = utils::get_hwid();
+			auto iv = encryption::sha256(encryption::iv_key());
+			auto data =
+				XorStr("type=").c_str() + encryption::encode("register") +
+				XorStr("&username=").c_str() + encryption::encrypt(username, enckey, iv) +
+				XorStr("&pass=").c_str() + encryption::encrypt(password, enckey, iv) +
+				XorStr("&key=").c_str() + encryption::encrypt(key, enckey, iv) +
+				XorStr("&hwid=").c_str() + encryption::encrypt(hwid, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
+
+			if (json[("success")])
+			{
+				// optional success message
+				load_user_data(json[("info")]);
+			}
+			else
+			{
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
+				Sleep(3500);
+				exit(0);
+			}
+		}
+
+		void upgrade(std::string username, std::string key) {
+
+			auto iv = encryption::sha256(encryption::iv_key());
+			auto data =
+				XorStr("type=").c_str() + encryption::encode("upgrade") +
+				XorStr("&username=").c_str() + encryption::encrypt(username, enckey, iv) +
+				XorStr("&key=").c_str() + encryption::encrypt(key, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
+
+			if (json[("success")])
+			{
+				// optional success message
+				load_user_data(json[("info")]);
+			}
+			else
+			{
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
+				Sleep(3500);
+				exit(0);
+			}
+		}
+
+		void license(std::string key) {
+
+			auto iv = encryption::sha256(encryption::iv_key());
+			std::string hwid = utils::get_hwid();
+			auto data =
+				XorStr("type=").c_str() + encryption::encode("license") +
+				XorStr("&key=").c_str() + encryption::encrypt(key, enckey, iv) +
+				XorStr("&hwid=").c_str() + encryption::encrypt(hwid, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
+
+			if (json[("success")])
+			{
+				// optional success message
+				load_user_data(json[("info")]);
+			}
+			else
+			{
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
+				Sleep(3500);
+				exit(0);
 			}
 		}
 
 		std::string var(std::string varid) {
 
-			std::string hwid = utils::get_hwid();
 			auto iv = encryption::sha256(encryption::iv_key());
 			auto data =
 				XorStr("type=").c_str() + encryption::encode("var") +
-				XorStr("&key=").c_str() + encryption::encrypt(user_data.key, secret, iv) +
-				XorStr("&varid=").c_str() + encryption::encrypt(varid, secret, iv) +
-				XorStr("&hwid=").c_str() + encryption::encrypt(hwid, secret, iv) +
+				XorStr("&varid=").c_str() + encryption::encrypt(varid, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
 				XorStr("&name=").c_str() + encryption::encode(name) +
 				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
 				XorStr("&init_iv=").c_str() + iv;
 			auto response = req(data);
-			response = encryption::decrypt(response, secret, iv);
+			response = encryption::decrypt(response, enckey, iv);
 			auto json = response_decoder.parse(response);
 
 			if (json[("success")])
@@ -354,15 +402,20 @@ namespace KeyAuth {
 			}
 		}
 
-
-
 		void log(std::string message) {
 
 			auto iv = encryption::sha256(encryption::iv_key());
+
+			char acUserName[100];
+			DWORD nUserName = sizeof(acUserName);
+			GetUserNameA(acUserName, &nUserName);
+			std::string UsernamePC = acUserName;
+
 			std::string data =
 				XorStr("type=").c_str() + encryption::encode(XorStr("log").c_str()) +
-				XorStr("&key=").c_str() + encryption::encrypt(user_data.key, secret, iv) +
-				XorStr("&message=").c_str() + encryption::encrypt(message, secret, iv) +
+				XorStr("&pcuser=").c_str() + encryption::encrypt(UsernamePC, enckey, iv) +
+				XorStr("&message=").c_str() + encryption::encrypt(message, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
 				XorStr("&name=").c_str() + encryption::encode(name) +
 				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
 				XorStr("&init_iv=").c_str() + iv;
@@ -370,53 +423,81 @@ namespace KeyAuth {
 			req(data);
 		}
 
-		void Memory(std::string fileid, std::string& s_reply, std::string output = XorStr("same.exe").c_str(), bool memory = false, unsigned char** ape = nullptr) {
+		std::vector<unsigned char> download(std::string fileid) {
 			auto iv = encryption::sha256(encryption::iv_key());
-			c_lw_http    lw_http;
-			c_lw_httpd    lw_http_d;
+			auto to_uc_vector = [](std::string value) {
+				return std::vector<unsigned char>(value.data(), value.data() + value.length() + 1);
+			};
 
-			if (!lw_http.open_session())
-				MessageBoxA(0, "fail", "ret", 0);
+			auto data =
+				XorStr("type=").c_str() + encryption::encode("file") +
+				XorStr("&fileid=").c_str() + encryption::encrypt(fileid, enckey, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
 
-			lw_http_d.add_field(PCHAR("type"), encryption::encode(XorStr("file").c_str()).c_str());
-			lw_http_d.add_field(PCHAR("fileid"), encryption::encrypt(fileid, secret, iv).c_str());
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
 
-			lw_http_d.add_field(PCHAR("name"), encryption::encode(name).c_str());
-			lw_http_d.add_field(PCHAR("ownerid"), encryption::encode(ownerid).c_str());
-			lw_http_d.add_field(PCHAR("init_iv"), iv.c_str());
-
-			const auto b_lw_http = lw_http.post(L"https://keyauth.com/api/v3/", s_reply, lw_http_d);
-			//s_reply = encryption::decrypt(s_reply, secret, iv); // RAW file
-
-			if (memory)
+			if (!json["success"])
 			{
-				*ape = (unsigned char*)s_reply.data();
-			}
-			else // Not loading in memory.
-			{
-				std::ofstream file(output.c_str(), std::ios_base::out | std::ios_base::binary);
-				file.write(s_reply.data(), s_reply.size());
-				file.close();
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
 			}
 
-			lw_http.close_session();
+			auto file = encryption::decode(json["contents"]);
+
+			return to_uc_vector(file);
 		}
+
+		void webhook(std::string id, std::string params) {
+
+			auto iv = encryption::sha256(encryption::iv_key());
+			std::string hwid = utils::get_hwid();
+
+			std::string data =
+				XorStr("type=").c_str() + encryption::encode(XorStr("webhook").c_str()) +
+				XorStr("&webid=").c_str() + encryption::encrypt(id, secret, iv) +
+				XorStr("&params=").c_str() + encryption::encrypt(params, secret, iv) +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
+
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
+
+			if (json[("success")])
+			{
+				// optional success message
+			}
+			else
+			{
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
+			}
+		}
+
 
 		class user_data_class {
 		public:
-			std::string key;
+			std::string username;
 			std::tm expiry;
-			int level;
+			std::string subscription;
 		};
 
 		user_data_class user_data;
 
 	private:
+		std::string sessionid, enckey;
+
 		static size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
 			((std::string*)userp)->append((char*)contents, size * nmemb);
 			return size * nmemb;
 		}
-
 
 		static std::string req(std::string data) {
 			CURL* curl = curl_easy_init();
@@ -426,15 +507,17 @@ namespace KeyAuth {
 
 			std::string to_return;
 
-			curl_easy_setopt(curl, CURLOPT_URL, XorStr("https://keyauth.com/api/v3/").c_str());
+			curl_easy_setopt(curl, CURLOPT_URL, XorStr("https://keyauth.com/api/1.0/").c_str());
 			curl_easy_setopt(curl, CURLOPT_USERAGENT, XorStr("KeyAuth").c_str());
 
 			curl_easy_setopt(curl, CURLOPT_NOPROXY, XorStr("keyauth.com").c_str());
 
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
-
-			curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, "sha256//UjJQOuTpgenjm6zOasOClsM8Ua6m6IJ09jzwC6YYDh0=");
+			
+			curl_easy_setopt(curl, CURLOPT_DNS_SERVERS, XorStr("1.1.1.1,1.0.0.1").c_str()); // resolve ISP blockage issues caused by false domain report https://github.com/mitchellkrogza/Phishing.Database/issues/194
+			
+			curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, "sha256//zaXl1uxtEA6FAR8KKoew4FYX+X3Khlfd/zjVD+SdMpc=");
 
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
 
@@ -448,27 +531,23 @@ namespace KeyAuth {
 
 			return to_return;
 		}
+
 		class user_data_structure {
 		public:
-			std::string key;
+			std::string username;
 			std::string expiry;
-			int level;
+			std::string subscription;
 		};
 
 		void load_user_data(nlohmann::json data) {
-
-			user_data.key = data["key"];
-
-
+			user_data.username = data["username"];
 			user_data.expiry = utils::timet_to_tm(
-				utils::string_to_timet(data["expiry"])
+				utils::string_to_timet(data["subscriptions"][0]["expiry"])
 			);
-
-			user_data.level = data["level"];
-
+			user_data.subscription = data["subscriptions"][0]["subscription"];
 		}
 
 		nlohmann::json response_decoder;
-		
+
 	};
 }
