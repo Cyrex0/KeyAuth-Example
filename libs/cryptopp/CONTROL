@@ -1,7 +1,0 @@
-Package: cryptopp
-Version: 8.2.0-1
-Architecture: x64-windows-static
-Multi-Arch: same
-Abi: fc830a53739d1e211d671144f92aaa74e2f0f93f
-Description: Crypto++ is a free C++ class library of cryptographic schemes.
-Type: Port
