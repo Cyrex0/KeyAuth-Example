@@ -336,7 +336,6 @@ namespace KeyAuth {
 			if (json[("success")])
 			{
 				// optional success message
-				load_user_data(json[("info")]);
 			}
 			else
 			{
@@ -367,6 +366,33 @@ namespace KeyAuth {
 			{
 				// optional success message
 				load_user_data(json[("info")]);
+			}
+			else
+			{
+				std::cout << XorStr("\n\n Status: Failure: ");
+				std::cout << std::string(json[("message")]);
+				Sleep(3500);
+				exit(0);
+			}
+		}
+
+		void ban() {
+
+			auto iv = encryption::sha256(encryption::iv_key());
+			std::string hwid = utils::get_hwid();
+			auto data =
+				XorStr("type=").c_str() + encryption::encode("ban") +
+				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
+				XorStr("&name=").c_str() + encryption::encode(name) +
+				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
+				XorStr("&init_iv=").c_str() + iv;
+			auto response = req(data);
+			response = encryption::decrypt(response, enckey, iv);
+			auto json = response_decoder.parse(response);
+
+			if (json[("success")])
+			{
+				// optional success message
 			}
 			else
 			{
@@ -411,7 +437,7 @@ namespace KeyAuth {
 			GetUserNameA(acUserName, &nUserName);
 			std::string UsernamePC = acUserName;
 
-			std::string data =
+			auto data =
 				XorStr("type=").c_str() + encryption::encode(XorStr("log").c_str()) +
 				XorStr("&pcuser=").c_str() + encryption::encrypt(UsernamePC, enckey, iv) +
 				XorStr("&message=").c_str() + encryption::encrypt(message, enckey, iv) +
@@ -455,19 +481,22 @@ namespace KeyAuth {
 		void webhook(std::string id, std::string params) {
 
 			auto iv = encryption::sha256(encryption::iv_key());
-			std::string hwid = utils::get_hwid();
 
-			std::string data =
+			auto data =
 				XorStr("type=").c_str() + encryption::encode(XorStr("webhook").c_str()) +
-				XorStr("&webid=").c_str() + encryption::encrypt(id, secret, iv) +
-				XorStr("&params=").c_str() + encryption::encrypt(params, secret, iv) +
+				XorStr("&webid=").c_str() + encryption::encrypt(id, enckey, iv) +
+				XorStr("&params=").c_str() + encryption::encrypt(params, enckey, iv) +
 				XorStr("&sessionid=").c_str() + encryption::encode(sessionid) +
 				XorStr("&name=").c_str() + encryption::encode(name) +
 				XorStr("&ownerid=").c_str() + encryption::encode(ownerid) +
 				XorStr("&init_iv=").c_str() + iv;
 
 			auto response = req(data);
+			
 			response = encryption::decrypt(response, enckey, iv);
+			std::cout << response;
+			
+
 			auto json = response_decoder.parse(response);
 
 			if (json[("success")])
@@ -507,17 +536,10 @@ namespace KeyAuth {
 
 			std::string to_return;
 
-			curl_easy_setopt(curl, CURLOPT_URL, XorStr("https://keyauth.com/api/1.0/").c_str());
-			curl_easy_setopt(curl, CURLOPT_USERAGENT, XorStr("KeyAuth").c_str());
-
-			curl_easy_setopt(curl, CURLOPT_NOPROXY, XorStr("keyauth.com").c_str());
+			curl_easy_setopt(curl, CURLOPT_URL, XorStr("https://keyauth.uk/api/1.0/").c_str());
 
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
 			curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
-			
-			curl_easy_setopt(curl, CURLOPT_DNS_SERVERS, XorStr("1.1.1.1,1.0.0.1").c_str()); // resolve ISP blockage issues caused by false domain report https://github.com/mitchellkrogza/Phishing.Database/issues/194
-			
-			curl_easy_setopt(curl, CURLOPT_PINNEDPUBLICKEY, "sha256//zaXl1uxtEA6FAR8KKoew4FYX+X3Khlfd/zjVD+SdMpc=");
 
 			curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data.c_str());
 
@@ -528,7 +550,9 @@ namespace KeyAuth {
 
 			if (code != CURLE_OK)
 				MessageBoxA(0, curl_easy_strerror(code), 0, MB_ICONERROR);
-
+			
+			curl_easy_cleanup(curl);
+			
 			return to_return;
 		}
 
